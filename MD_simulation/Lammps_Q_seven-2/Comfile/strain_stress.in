@@ -1,0 +1,92 @@
+
+
+variable sub_folder_name string "Fe0.2Ni0.2Cr0.2Co0.2Cu0.2_fcc_193_final"
+
+
+variable data_file_name string "Fe0.20Ni0.20Cr0.20Co0.20Mg0.20_fcc.lammps-data"
+
+# data数据文件名
+
+
+#shell mkdir ${sub_folder_name}
+# 文件夹名
+
+variable t index 300 #400 500 600 700 800 900 1000 1100 1200
+label loop_start
+
+# ------------------------ INITIALIZATION ----------------------------
+units metal
+boundary p p p
+dimension	3
+atom_style atomic
+
+
+shell mkdir ${t}
+
+
+log ${t}/log_${t}.txt
+
+read_data ${data_file_name}
+
+
+
+
+# ------------------------ FORCE FIELDS ------------------------------
+pair_style eam/alloy
+pair_coeff * * FeNiCrCoCu-with-ZBL.eam.alloy Fe Ni Cr Co Cu
+
+# 4. Structure relaxation (energy minimization)
+min_style       cg
+minimize 1.0e-6 1.0e-6 1000 1000
+
+
+#-----------------速度初始化
+velocity all create 300 876848 dist gaussian
+
+
+# 5. Annealing at 300 K  退火
+
+fix 1 all npt temp 300 300 0.1 iso 0 0 0.1 # NPT模拟，保持300 K
+thermo 1000 # 每100步输出一次热力学信息
+thermo_style custom step lx ly lz press pxx pyy pzz pe temp
+run 100000 # 100 ps = 100000 fs
+# 6. Remove fix and prepare for tensile test
+unfix 1 # 取消NPT
+reset_timestep 0 # 重置时间步
+
+# 应力-应变输出
+variable tmp equal "lx"
+variable L0 equal ${tmp}
+variable strain equal "(lx - v_L0)/v_L0"
+variable p1 equal "v_strain"
+variable p2 equal "-pxx/10000"
+variable p3 equal "-pyy/10000"
+variable p4 equal "-pzz/10000"
+fix def1 all print 100 "${p1} ${p2} ${p3} ${p4}" file ${t}/${sub_folder_name}_def.txt screen no
+
+# print 100: 每 100步输出一次数据。这个间隔用于控制数据输出的频率，减少文件大小和计算开销。
+
+
+
+# 设置拉伸速率
+variable srate equal 1.0e10
+variable srate1 equal "v_srate / 1.0e12"
+
+# 保存拉伸轨迹
+dump 	1 all custom 250 ${t}/tensile_${t}.lammpstrj type x y z
+
+
+# npt下进行拉伸模拟
+fix		1 all npt temp 300 300 1 y 0 0 1 z 0 0 1 drag 1
+fix		2 all deform 1 x erate ${srate1} units box remap x
+run		30000
+
+
+########## SIMULATION DONE
+print "All done"
+
+
+# 准备下一次循环
+clear
+next t
+jump strain_stress.in loop_start
